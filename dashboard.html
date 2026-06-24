@@ -3117,8 +3117,24 @@
         function currentRange(tabsId = 'vol-tabs') { const a = document.querySelector('#' + tabsId + ' .chart-tab.active'); return a ? +a.dataset.d : 14; }
         function dailyCounts(days) { return dailyCountsFromRows(ALL_ROWS, days); }
         function dailyCountsFromRows(rows, days) {
-            const out = []; const now = new Date(); now.setHours(0, 0, 0, 0);
-            for (let i = days - 1; i >= 0; i--) { const d = new Date(now.getTime() - i * 864e5), next = new Date(d.getTime() + 864e5); out.push({ d: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }), v: rows.filter(r => r.status === 'sent' && r.sent_at && new Date(r.sent_at) >= d && new Date(r.sent_at) < next).length }); }
+            const out = [];
+            const now = new Date(); now.setHours(0, 0, 0, 0);
+            let collected = 0;
+            let i = 0;
+            // Walk backwards collecting only Mon–Fri until we have `days` workdays
+            while (collected < days) {
+                const d = new Date(now.getTime() - i * 864e5);
+                const dow = d.getDay(); // 0=Sun, 6=Sat
+                if (dow !== 0 && dow !== 6) {
+                    const next = new Date(d.getTime() + 864e5);
+                    out.unshift({
+                        d: d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }),
+                        v: rows.filter(r => r.status === 'sent' && r.sent_at && new Date(r.sent_at) >= d && new Date(r.sent_at) < next).length
+                    });
+                    collected++;
+                }
+                i++;
+            }
             return out;
         }
         function tOpts() { return { backgroundColor: C.tbg, borderColor: C.tbd, borderWidth: 1, titleColor: C.ttext, bodyColor: C.ttext, padding: 9, cornerRadius: 7 }; }
@@ -3287,18 +3303,42 @@
             const dt = new Date(d);
             return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
         }
-        function todayMinusKey(days) {
-            const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - days);
-            return dateKey(d);
+        function subtractWorkdays(startDate, workdays) {
+            const d = new Date(startDate);
+            d.setHours(0, 0, 0, 0);
+            let remaining = workdays;
+            while (remaining > 0) {
+                d.setDate(d.getDate() - 1);
+                const dow = d.getDay(); // 0=Sun, 6=Sat
+                if (dow !== 0 && dow !== 6) remaining--;
+            }
+            return d;
+        }
+        function todayMinusWorkdayKey(workdays) {
+            return dateKey(subtractWorkdays(new Date(), workdays));
+        }
+        function countWorkdaysBetween(from, to) {
+            const start = new Date(from); start.setHours(0, 0, 0, 0);
+            const end = new Date(to); end.setHours(0, 0, 0, 0);
+            let count = 0;
+            const cur = new Date(start);
+            while (cur < end) {
+                cur.setDate(cur.getDate() + 1);
+                const dow = cur.getDay();
+                if (dow !== 0 && dow !== 6) count++;
+            }
+            return count;
         }
         function dayLabel(r) {
             if (r.drip_step) return String(r.drip_step).trim();
             if (r.sequence_day) return 'Day ' + r.sequence_day;
             if (!r.sent_at) return '—';
-            const today = new Date(); today.setHours(0, 0, 0, 0);
-            const d = new Date(r.sent_at); d.setHours(0, 0, 0, 0);
-            const diff = Math.round((today - d) / 864e5);
-            return 'Day ' + (diff + 1);
+            const today = new Date();
+            const workdaysDiff = countWorkdaysBetween(new Date(r.sent_at), today);
+            if (workdaysDiff === 0) return 'Day 1';
+            if (workdaysDiff === 2) return 'Day 3';
+            if (workdaysDiff === 4) return 'Day 5';
+            return 'Day ' + (workdaysDiff + 1);
         }
         function rowsForDayOffset(rows, offset) {
             const stepLabels = { 0: ['day 1', '1'], 3: ['day 3', '3'], 5: ['day 5', '5'] };
@@ -3307,7 +3347,11 @@
                 const byStep = rows.filter(r => r.drip_step && labels.includes(r.drip_step.toLowerCase().trim()));
                 if (byStep.length) return byStep;
             }
-            const target = todayMinusKey(offset);
+            // offset here is calendar offset used as step identifier (0, 3, 5)
+            // map to actual workdays back: Day1=0, Day3=2 workdays back, Day5=4 workdays back
+            const workdayMap = { 0: 0, 3: 2, 5: 4 };
+            const wdBack = workdayMap[offset] !== undefined ? workdayMap[offset] : offset;
+            const target = wdBack === 0 ? dateKey(new Date()) : todayMinusWorkdayKey(wdBack);
             return rows.filter(r => r.sent_at && dateKey(r.sent_at) === target);
         }
         /* ============ TABLE ============ */
